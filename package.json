@@ -1,0 +1,16 @@
+{
+  "name": "fluxo-server-ponte",
+  "version": "2.0.0",
+  "description": "Servidor Ponte da Rede do Fluxo - Comunica App Usuário com App Admin",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": ["fluxo", "social", "network", "ponte"],
+  "author": "Fluxo Team",
+  "license": "MIT"
+}
