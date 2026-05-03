@@ -1,0 +1,6 @@
+node_modules/
+database.json
+offline_log.json
+*.log
+.env
+.DS_Store
