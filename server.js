@@ -1,302 +1,639 @@
-// ==================== SERVIDOR PONTE FLUXO ====================
-// Hospedar no Render.com (Plano Gratuito)
-// Este servidor atua como PONTE entre o App Usuário e o App Admin
-
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
-// ==================== CONFIGURAÇÃO ====================
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'database.json');
 const OFFLINE_LOG_FILE = path.join(__dirname, 'offline_log.json');
+const BLACKLIST_FILE = path.join(__dirname, 'blacklist.json');
+const AUDIT_FILE = path.join(__dirname, 'audit_log.json');
 
-// ==================== BANCO DE DADOS ====================
+// ==================== ESTRUTURAS DE SEGURANÇA SUPREMAS ====================
 let DB = {
-    users: [],
-    posts: [],
-    stories: [],
-    messages: [],
-    reels: [],
-    reports: [],
-    notes: [],
-    suspendedUsers: {},
-    serverLog: [],
-    adminConnected: false,
-    lastAdminPing: null,
-    requestCount: 0,
-    startTime: Date.now()
+    users: [], posts: [], stories: [], messages: [], reels: [],
+    reports: [], notes: [], suspendedUsers: {}, serverLog: [],
+    adminConnected: false, lastAdminPing: null,
+    requestCount: 0, startTime: Date.now(),
+    
+    // SEGURANÇA NÍVEL DEUS SUPREMO
+    ipBlacklist: {},
+    ipRequests: {},
+    userActions: {},
+    spamPatterns: {},
+    deviceFingerprints: {},
+    vpnDetections: {},
+    globalPostHash: {},
+    commentHash: {},
+    suspiciousAccounts: {},
+    banHistory: [],
+    sessionTokens: {},       // Tokens de sessão válidos
+    rateLimitViolations: {}, // Violações de rate limit
+    ddosProtection: {},      // Proteção DDoS
+    requestSignatures: {},   // Assinaturas de requisições
+    honeypotTriggers: {},    // Honeypots acionados
+    blockedUserAgents: {},   // User Agents bloqueados
+    originWhitelist: [],     // Origens permitidas
+    csrfTokens: {},          // Tokens CSRF
+    encryptionKeys: {}       // Chaves de criptografia
 };
 
-// Log offline (ações que aconteceram enquanto admin estava offline)
 let offlineLog = [];
+let globalBlacklist = { ips: [], fingerprints: [], patterns: [], userAgents: [] };
+let auditLog = [];
 
-// ==================== CARREGAR/SALVAR ====================
+// ==================== CONFIG DE SEGURANÇA SUPREMA ====================
+const GOD_MODE_SUPREME = {
+    // Anti-Spam
+    maxPostsPerMinute: 2,
+    maxPostsPerHour: 10,
+    maxRepostsPerMinute: 1,
+    maxRepostsTotal: 3,
+    maxCommentsPerMinute: 3,
+    maxIdenticalPosts: 1,
+    maxIdenticalComments: 2,
+    
+    // Anti-Força Bruta
+    maxLoginAttempts: 3,
+    loginLockoutDuration: 900000, // 15 minutos
+    maxPasswordResetAttempts: 2,
+    
+    // Anti-DDoS
+    maxRequestsPerSecond: 10,
+    maxRequestsPerMinute: 30,
+    maxConcurrentConnections: 50,
+    ddosThreshold: 100,       // Requisições/segundo para ativar proteção
+    ddosBlockDuration: 3600000, // 1 hora
+    
+    // Anti-Injeção
+    maxContentLength: 5000,   // Tamanho máximo do conteúdo
+    maxMediaSize: 10485760,   // 10MB máximo para mídia
+    blockedPatterns: [
+        /<script[^>]*>/i,     // Script tags
+        /<\/script>/i,        // Script closing
+        /javascript:/i,       // JavaScript protocol
+        /on\w+\s*=/i,         // Event handlers (onclick, onload)
+        /<iframe[^>]*>/i,     // Iframes
+        /<object[^>]*>/i,     // Objects
+        /<embed[^>]*>/i,      // Embeds
+        /eval\s*\(/i,         // Eval function
+        /document\.cookie/i,  // Cookie theft
+        /document\.write/i,   // Document write
+        /XMLHttpRequest/i,    // XHR in content
+        /fetch\s*\(/i,        // Fetch in content
+        /WebSocket/i,         // WebSocket in content
+        /localStorage/i,      // LocalStorage access
+        /sessionStorage/i,    // SessionStorage access
+        /alert\s*\(/i,        // Alert
+        /prompt\s*\(/i,       // Prompt
+        /confirm\s*\(/i,      // Confirm
+        /\.innerHTML\s*=/i,   // innerHTML manipulation
+        /\.outerHTML\s*=/i,   // outerHTML
+        /String\.fromCharCode/i, // Obfuscated code
+        /\\x[0-9a-f]{2}/i,    // Hex encoded
+        /\\u[0-9a-f]{4}/i,    // Unicode encoded
+        /&#x[0-9a-f]+;/i,     // HTML entities
+        /base64,/i,           // Base64 in content (suspicious)
+    ],
+    
+    // Anti-Tampering
+    signatureSecret: crypto.randomBytes(32).toString('hex'),
+    tokenExpiry: 3600000,     // 1 hora
+    maxTokenUses: 100,
+    
+    // Penalidades
+    spamWarningThreshold: 2,
+    suspendDuration: 86400000,
+    permaBanThreshold: 3,
+    banDuration: Infinity,
+    
+    // Rate Limiting
+    maxRequestsPerIP: 100,
+    requestWindowMs: 60000,
+    
+    // VPN/Proxy
+    vpnCheckEnabled: true,
+    maxAccountsPerIP: 1,
+    maxAccountsPerFingerprint: 1,
+    
+    // Honeypot
+    honeypotEnabled: true,
+    honeypotFieldName: 'website', // Campo invisível para bots
+    honeypotBanDuration: 86400000,
+};
+
+// ==================== FUNÇÕES DE SEGURANÇA ====================
+
+// Sanitização de entrada (anti-XSS/Injeção)
+function sanitizeInput(input) {
+    if (typeof input !== 'string') return '';
+    
+    // Remover tags HTML
+    let sanitized = input
+        .replace(/<[^>]*>/g, '')           // Remove todas as tags HTML
+        .replace(/&/g, '&amp;')            // Escapa &
+        .replace(/</g, '&lt;')             // Escapa <
+        .replace(/>/g, '&gt;')             // Escapa >
+        .replace(/"/g, '&quot;')           // Escapa "
+        .replace(/'/g, '&#x27;')           // Escapa '
+        .replace(/\//g, '&#x2F;')          // Escapa /
+        .replace(/\\/g, '&#x5C;')          // Escapa \
+        .replace(/`/g, '&#x60;')           // Escapa `
+        .replace(/\(/g, '&#40;')           // Escapa (
+        .replace(/\)/g, '&#41;')           // Escapa )
+        .replace(/\[/g, '&#91;')           // Escapa [
+        .replace(/\]/g, '&#93;')           // Escapa ]
+        .replace(/\{/g, '&#123;')          // Escapa {
+        .replace(/\}/g, '&#125;');         // Escapa }
+    
+    return sanitized;
+}
+
+// Detecção de padrões maliciosos
+function detectMaliciousContent(content) {
+    if (!content) return { safe: true };
+    
+    for (const pattern of GOD_MODE_SUPREME.blockedPatterns) {
+        if (pattern.test(content)) {
+            return {
+                safe: false,
+                reason: 'Conteúdo malicioso detectado',
+                pattern: pattern.toString(),
+                severity: 'CRITICAL'
+            };
+        }
+    }
+    
+    // Verificar tamanho
+    if (content.length > GOD_MODE_SUPREME.maxContentLength) {
+        return { safe: false, reason: 'Conteúdo muito longo', severity: 'HIGH' };
+    }
+    
+    return { safe: true };
+}
+
+// Verificar injeção SQL (mesmo sem SQL, por segurança)
+function detectSQLInjection(input) {
+    const sqlPatterns = [
+        /(\s|^)(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|UNION|EXEC|EXECUTE)\s/i,
+        /(\s|^)(OR|AND)\s+['"]?\w+['"]?\s*=\s*['"]?\w+['"]?/i,
+        /--\s*$/,                              // SQL comment
+        /\/\*[\s\S]*\*\//,                    // Block comment
+        /;\s*(SELECT|INSERT|UPDATE|DELETE)/i,  // Multiple statements
+        /'\s*OR\s*'1'?\s*=\s*'1/i,           // Classic injection
+        /'\s*OR\s*1\s*=\s*1/i,               // Numeric injection
+    ];
+    
+    for (const pattern of sqlPatterns) {
+        if (pattern.test(input)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Gerar token de sessão seguro
+function generateSessionToken(userId, ip) {
+    const tokenData = `${userId}|${ip}|${Date.now()}|${crypto.randomBytes(16).toString('hex')}`;
+    const token = crypto.createHmac('sha256', GOD_MODE_SUPREME.signatureSecret)
+        .update(tokenData)
+        .digest('hex');
+    
+    DB.sessionTokens[token] = {
+        userId: userId,
+        ip: ip,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + GOD_MODE_SUPREME.tokenExpiry,
+        useCount: 0
+    };
+    
+    return token;
+}
+
+// Validar token de sessão
+function validateSessionToken(token, ip) {
+    if (!token || !DB.sessionTokens[token]) return false;
+    
+    const session = DB.sessionTokens[token];
+    
+    // Verificar expiração
+    if (Date.now() > session.expiresAt) {
+        delete DB.sessionTokens[token];
+        return false;
+    }
+    
+    // Verificar IP (anti-hijacking)
+    if (session.ip !== ip) {
+        // Possível hijacking detectado
+        auditLog.push({
+            type: 'SESSION_HIJACK_ATTEMPT',
+            token: token.substring(0, 10) + '...',
+            originalIP: session.ip,
+            attemptedIP: ip,
+            timestamp: Date.now()
+        });
+        delete DB.sessionTokens[token];
+        return false;
+    }
+    
+    // Verificar uso excessivo
+    session.useCount++;
+    if (session.useCount > GOD_MODE_SUPREME.maxTokenUses) {
+        delete DB.sessionTokens[token];
+        return false;
+    }
+    
+    return true;
+}
+
+// Proteção DDoS
+function ddosProtection(ip) {
+    const now = Date.now();
+    
+    if (!DB.ddosProtection[ip]) {
+        DB.ddosProtection[ip] = {
+            requests: [],
+            blocked: false,
+            blockUntil: null
+        };
+    }
+    
+    const protection = DB.ddosProtection[ip];
+    
+    // Verificar se está bloqueado
+    if (protection.blocked && protection.blockUntil > now) {
+        return { allowed: false, reason: 'DDoS protection active' };
+    }
+    
+    // Limpar requisições antigas
+    protection.requests = protection.requests.filter(t => now - t < 1000);
+    
+    // Adicionar requisição atual
+    protection.requests.push(now);
+    
+    // Verificar threshold
+    if (protection.requests.length > GOD_MODE_SUPREME.ddosThreshold) {
+        protection.blocked = true;
+        protection.blockUntil = now + GOD_MODE_SUPREME.ddosBlockDuration;
+        
+        // Adicionar à blacklist
+        DB.ipBlacklist[ip] = {
+            bannedAt: now,
+            reason: 'DDoS attack detected',
+            permanent: false,
+            until: protection.blockUntil
+        };
+        
+        auditLog.push({
+            type: 'DDOS_ATTACK_DETECTED',
+            ip: ip,
+            requestRate: protection.requests.length,
+            timestamp: now
+        });
+        
+        return { allowed: false, reason: 'DDoS attack blocked' };
+    }
+    
+    return { allowed: true };
+}
+
+// Verificar honeypot (campos invisíveis para bots)
+function checkHoneypot(payload) {
+    if (GOD_MODE_SUPREME.honeypotEnabled && payload) {
+        // Se o campo honeypot estiver preenchido, é um bot
+        if (payload[GOD_MODE_SUPREME.honeypotFieldName]) {
+            return { isBot: true, reason: 'Honeypot triggered' };
+        }
+    }
+    return { isBot: false };
+}
+
+// Verificar assinatura de requisição (anti-tampering)
+function verifyRequestSignature(payload, signature, ip) {
+    if (!signature) return false;
+    
+    const expectedSignature = crypto.createHmac('sha256', GOD_MODE_SUPREME.signatureSecret)
+        .update(JSON.stringify(payload) + ip)
+        .digest('hex');
+    
+    return crypto.timingSafeEqual(
+        Buffer.from(signature),
+        Buffer.from(expectedSignature)
+    );
+}
+
+// Detectar race condition (múltiplas requisições simultâneas)
+function detectRaceCondition(userId, action) {
+    const now = Date.now();
+    const key = `${userId}_${action}`;
+    
+    if (!DB.requestSignatures[key]) {
+        DB.requestSignatures[key] = [];
+    }
+    
+    // Limpar assinaturas antigas
+    DB.requestSignatures[key] = DB.requestSignatures[key].filter(t => now - t < 100);
+    
+    // Se já tem uma requisição muito recente, é race condition
+    if (DB.requestSignatures[key].length > 0) {
+        const lastRequest = DB.requestSignatures[key][DB.requestSignatures[key].length - 1];
+        if (now - lastRequest < 50) { // 50ms = suspeito
+            return { raceCondition: true };
+        }
+    }
+    
+    DB.requestSignatures[key].push(now);
+    return { raceCondition: false };
+}
+
+// Validar Content-Type e headers
+function validateHeaders(req) {
+    const contentType = req.headers['content-type'] || '';
+    const userAgent = req.headers['user-agent'] || '';
+    const origin = req.headers['origin'] || '';
+    const referer = req.headers['referer'] || '';
+    
+    // Verificar Content-Type
+    if (req.method === 'POST' && !contentType.includes('application/json')) {
+        return { valid: false, reason: 'Invalid Content-Type' };
+    }
+    
+    // Verificar User-Agent (bloquear bots conhecidos)
+    const blockedAgents = ['bot', 'crawler', 'spider', 'scraper', 'curl', 'wget', 'python', 'java/', 'nmap'];
+    const lowerAgent = userAgent.toLowerCase();
+    
+    for (const agent of blockedAgents) {
+        if (lowerAgent.includes(agent)) {
+            DB.blockedUserAgents[userAgent] = (DB.blockedUserAgents[userAgent] || 0) + 1;
+            return { valid: false, reason: 'Bot detected' };
+        }
+    }
+    
+    // Verificar se User-Agent está vazio (suspeito)
+    if (!userAgent || userAgent.length < 10) {
+        return { valid: false, reason: 'Suspicious User-Agent' };
+    }
+    
+    return { valid: true };
+}
+
+// Criptografar dados sensíveis
+function encryptData(data) {
+    const key = crypto.scryptSync(GOD_MODE_SUPREME.signatureSecret, 'salt', 32);
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+    let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return iv.toString('hex') + ':' + encrypted;
+}
+
+// Descriptografar dados
+function decryptData(encryptedData) {
+    try {
+        const parts = encryptedData.split(':');
+        const iv = Buffer.from(parts[0], 'hex');
+        const encrypted = parts[1];
+        const key = crypto.scryptSync(GOD_MODE_SUPREME.signatureSecret, 'salt', 32);
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return JSON.parse(decrypted);
+    } catch (e) {
+        return null;
+    }
+}
+
+// ==================== FUNÇÕES DE BANCO ====================
 function loadDatabase() {
     try {
         if (fs.existsSync(DATA_FILE)) {
-            const data = fs.readFileSync(DATA_FILE, 'utf8');
-            const parsed = JSON.parse(data);
+            const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
             DB = { ...DB, ...parsed };
-            console.log(`📦 DB carregado: ${DB.users.length} usuários, ${DB.posts.length} posts`);
-        } else {
-            console.log('📦 Novo banco de dados criado');
-            saveDatabase();
+            ensureSecurityStructures();
         }
-    } catch (error) {
-        console.error('❌ Erro ao carregar DB:', error.message);
-    }
+    } catch (e) { console.error('DB Load Error:', e.message); }
     
-    // Carregar log offline
+    try {
+        if (fs.existsSync(BLACKLIST_FILE)) {
+            globalBlacklist = JSON.parse(fs.readFileSync(BLACKLIST_FILE, 'utf8'));
+        }
+    } catch (e) {}
+    
+    try {
+        if (fs.existsSync(AUDIT_FILE)) {
+            auditLog = JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf8')) || [];
+        }
+    } catch (e) {}
+    
     try {
         if (fs.existsSync(OFFLINE_LOG_FILE)) {
-            const data = fs.readFileSync(OFFLINE_LOG_FILE, 'utf8');
-            offlineLog = JSON.parse(data) || [];
-            console.log(`📋 Log offline carregado: ${offlineLog.length} ações pendentes`);
+            offlineLog = JSON.parse(fs.readFileSync(OFFLINE_LOG_FILE, 'utf8')) || [];
         }
-    } catch (error) {
-        console.error('❌ Erro ao carregar log offline:', error.message);
-        offlineLog = [];
-    }
+    } catch (e) {}
+}
+
+function ensureSecurityStructures() {
+    if (!DB.sessionTokens) DB.sessionTokens = {};
+    if (!DB.rateLimitViolations) DB.rateLimitViolations = {};
+    if (!DB.ddosProtection) DB.ddosProtection = {};
+    if (!DB.requestSignatures) DB.requestSignatures = {};
+    if (!DB.honeypotTriggers) DB.honeypotTriggers = {};
+    if (!DB.blockedUserAgents) DB.blockedUserAgents = {};
+    if (!DB.csrfTokens) DB.csrfTokens = {};
 }
 
 function saveDatabase() {
-    try {
-        const dataToSave = {
-            users: DB.users,
-            posts: DB.posts,
-            stories: DB.stories,
-            messages: DB.messages,
-            reels: DB.reels,
-            reports: DB.reports,
-            notes: DB.notes,
-            suspendedUsers: DB.suspendedUsers,
-            serverLog: DB.serverLog.slice(0, 1000),
-            adminConnected: DB.adminConnected,
-            lastAdminPing: DB.lastAdminPing,
-            requestCount: DB.requestCount,
-            startTime: DB.startTime
-        };
-        fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
-    } catch (error) {
-        console.error('❌ Erro ao salvar DB:', error.message);
-    }
+    try { fs.writeFileSync(DATA_FILE, JSON.stringify(DB, null, 2), 'utf8'); } catch (e) {}
 }
 
-function saveOfflineLog() {
-    try {
-        fs.writeFileSync(OFFLINE_LOG_FILE, JSON.stringify(offlineLog, null, 2), 'utf8');
-    } catch (error) {
-        console.error('❌ Erro ao salvar log offline:', error.message);
-    }
+function saveAuditLog() {
+    try { fs.writeFileSync(AUDIT_FILE, JSON.stringify(auditLog.slice(-5000), null, 2), 'utf8'); } catch (e) {}
 }
 
-// ==================== LIMPEZA ====================
-function cleanExpiredData() {
+// ==================== API PRINCIPAL COM SEGURANÇA SUPREMA ====================
+function processRequest(action, payload, reqIP, reqHeaders) {
     const now = Date.now();
-    
-    // Stories (24h)
-    DB.stories = DB.stories.filter(s => s.expiresAt > now);
-    
-    // Notes (20h)
-    DB.notes = DB.notes.filter(n => n.expiresAt > now);
-    
-    // Suspensões expiradas
-    Object.keys(DB.suspendedUsers).forEach(userId => {
-        const s = DB.suspendedUsers[userId];
-        if (s.until && s.until < now) {
-            delete DB.suspendedUsers[userId];
-            console.log(`✅ Suspensão expirada removida: ${userId}`);
-        }
-    });
-    
-    saveDatabase();
-}
-
-// ==================== API ====================
-function processRequest(action, payload) {
     DB.requestCount++;
     
-    // Verificar suspensão do usuário
+    // 🔒 CAMADA 1: Blacklist Global
+    if (globalBlacklist.ips.includes(reqIP)) {
+        auditLog.push({ type: 'BLACKLISTED_IP', ip: reqIP, action, timestamp: now });
+        saveAuditLog();
+        return { success: false, error: 'Access denied', code: 'BLACKLISTED' };
+    }
+    
+    // 🔒 CAMADA 2: IP Banido
+    if (DB.ipBlacklist[reqIP] && DB.ipBlacklist[reqIP].until > now) {
+        return { success: false, error: 'IP banned', code: 'IP_BANNED' };
+    }
+    
+    // 🔒 CAMADA 3: DDoS Protection
+    const ddosCheck = ddosProtection(reqIP);
+    if (!ddosCheck.allowed) {
+        return { success: false, error: ddosCheck.reason, code: 'DDOS_BLOCKED' };
+    }
+    
+    // 🔒 CAMADA 4: Rate Limiting
+    if (!checkRateLimit(reqIP)) {
+        return { success: false, error: 'Rate limit exceeded', code: 'RATE_LIMITED' };
+    }
+    
+    // 🔒 CAMADA 5: Header Validation
+    const headerCheck = validateHeaders({ method: 'POST', headers: reqHeaders });
+    if (!headerCheck.valid) {
+        return { success: false, error: headerCheck.reason, code: 'INVALID_HEADERS' };
+    }
+    
+    // 🔒 CAMADA 6: Suspension Check
     if (payload && payload.userId) {
         const suspension = DB.suspendedUsers[payload.userId];
-        if (suspension) {
-            if (!suspension.until || suspension.until > Date.now()) {
-                return {
-                    success: false,
-                    error: 'Conta suspensa: ' + (suspension.reason || 'Violação dos termos'),
-                    suspended: true
-                };
-            }
+        if (suspension && (!suspension.until || suspension.until > now)) {
+            return { success: false, error: 'Account suspended', code: 'SUSPENDED' };
         }
     }
     
-    // Registrar no log offline se admin não estiver conectado
-    if (!DB.adminConnected && action !== 'adminPing' && action !== 'ping') {
-        offlineLog.push({
-            action,
-            payload,
-            timestamp: Date.now()
-        });
-        if (offlineLog.length > 10000) offlineLog = offlineLog.slice(-10000);
-        saveOfflineLog();
+    // 🔒 CAMADA 7: Honeypot
+    if (payload) {
+        const honeypotCheck = checkHoneypot(payload);
+        if (honeypotCheck.isBot) {
+            DB.honeypotTriggers[reqIP] = (DB.honeypotTriggers[reqIP] || 0) + 1;
+            if (DB.honeypotTriggers[reqIP] > 3) {
+                DB.ipBlacklist[reqIP] = { until: now + 86400000, reason: 'Bot detected' };
+            }
+            saveDatabase();
+            return { success: false, error: 'Bot detected', code: 'HONEYPOT' };
+        }
     }
     
-    console.log(`📡 ${action} - ${payload?.username || payload?.userId || 'system'}`);
+    // 🔒 CAMADA 8: SQL Injection Detection
+    if (payload) {
+        const payloadStr = JSON.stringify(payload);
+        if (detectSQLInjection(payloadStr)) {
+            DB.ipBlacklist[reqIP] = { until: now + 86400000, reason: 'SQL Injection attempt' };
+            saveDatabase();
+            auditLog.push({ type: 'SQL_INJECTION', ip: reqIP, timestamp: now });
+            saveAuditLog();
+            return { success: false, error: 'Malicious request', code: 'INJECTION' };
+        }
+    }
+    
+    // 🔒 CAMADA 9: Content Sanitization
+    if (payload) {
+        if (payload.content) {
+            const maliciousCheck = detectMaliciousContent(payload.content);
+            if (!maliciousCheck.safe) {
+                auditLog.push({ type: 'MALICIOUS_CONTENT', ip: reqIP, reason: maliciousCheck.reason, timestamp: now });
+                saveAuditLog();
+                return { success: false, error: maliciousCheck.reason, code: 'MALICIOUS' };
+            }
+            payload.content = sanitizeInput(payload.content);
+        }
+        if (payload.bio) {
+            payload.bio = sanitizeInput(payload.bio);
+        }
+        if (payload.username) {
+            payload.username = sanitizeInput(payload.username);
+        }
+    }
+    
+    // 🔒 CAMADA 10: Race Condition Detection
+    if (payload && payload.userId && ['createPost', 'likePost', 'sendMessage'].includes(action)) {
+        const raceCheck = detectRaceCondition(payload.userId, action);
+        if (raceCheck.raceCondition) {
+            return { success: false, error: 'Too many requests', code: 'RACE_CONDITION' };
+        }
+    }
+    
+    console.log(`📡 ${action} - ${payload?.username || 'anon'} - IP: ${reqIP}`);
     
     // ==================== HANDLERS ====================
     const handlers = {
-        // ========== AUTENTICAÇÃO ==========
         register: () => {
-            const { username, password, avatar, avatarType, bio } = payload;
-            if (!username || !password) return { success: false, error: 'Dados incompletos' };
-            if (username.length < 3 || password.length < 3) return { success: false, error: 'Mínimo 3 caracteres' };
-            if (DB.users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
-                return { success: false, error: 'Usuário já existe' };
+            const { username, password } = payload;
+            if (!username || !password) return { success: false, error: 'Incomplete data' };
+            if (username.length < 3 || password.length < 3) return { success: false, error: 'Too short' };
+            
+            // Verificar nome suspeito
+            const spamNames = ['test', 'spam', 'bot', 'admin', 'root'];
+            if (spamNames.some(n => username.toLowerCase().includes(n))) {
+                return { success: false, error: 'Invalid username' };
             }
+            
+            if (DB.users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
+                return { success: false, error: 'Username exists' };
+            }
+            
+            const accountsFromIP = DB.users.filter(u => u.createdIP === reqIP).length;
+            if (accountsFromIP >= 1) {
+                return { success: false, error: 'Account limit reached' };
+            }
+            
             const newUser = {
-                id: 'u_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                username,
-                password,
-                avatar: avatar || 'default',
-                avatarType: avatarType || 'emoji',
-                bio: bio || '',
+                id: 'u_' + now + '_' + crypto.randomBytes(4).toString('hex'),
+                username, password,
+                avatar: payload.avatar || 'default',
+                avatarType: payload.avatarType || 'emoji',
+                bio: payload.bio || '',
                 accountType: 'public',
-                followers: [],
-                following: [],
-                followRequests: [],
-                savedPosts: [],
-                archivedPosts: [],
-                drafts: [],
-                createdAt: Date.now(),
+                followers: [], following: [],
+                savedPosts: [], drafts: [],
+                createdAt: now, createdIP: reqIP,
                 interests: []
             };
+            
             DB.users.push(newUser);
+            
+            // Gerar token de sessão
+            const token = generateSessionToken(newUser.id, reqIP);
+            
             saveDatabase();
-            console.log(`👤 Novo usuário: ${username}`);
-            return { success: true, user: { ...newUser, password: undefined } };
+            return { success: true, user: { ...newUser, password: undefined }, token };
         },
         
         login: () => {
             const { username, password } = payload;
+            
+            // Verificar tentativas de login
+            const loginKey = `login_${reqIP}`;
+            if (!DB.rateLimitViolations[loginKey]) DB.rateLimitViolations[loginKey] = { count: 0, lastAttempt: 0 };
+            
+            const loginAttempts = DB.rateLimitViolations[loginKey];
+            
+            if (loginAttempts.count >= GOD_MODE_SUPREME.maxLoginAttempts) {
+                if (now - loginAttempts.lastAttempt < GOD_MODE_SUPREME.loginLockoutDuration) {
+                    return { success: false, error: 'Too many attempts. Try later.' };
+                }
+                loginAttempts.count = 0;
+            }
+            
+            loginAttempts.count++;
+            loginAttempts.lastAttempt = now;
+            
             const user = DB.users.find(u =>
                 u.username.toLowerCase() === username.toLowerCase() && u.password === password
             );
-            if (!user) return { success: false, error: 'Credenciais inválidas' };
             
-            const suspension = DB.suspendedUsers[user.id];
-            if (suspension && (!suspension.until || suspension.until > Date.now())) {
-                return {
-                    success: false,
-                    error: 'Conta suspensa: ' + (suspension.reason || 'Violação'),
-                    suspended: true
-                };
-            }
-            
-            console.log(`🔑 Login: ${username}`);
-            return { success: true, user: { ...user, password: undefined } };
-        },
-        
-        // ========== PERFIL ==========
-        updateProfile: () => {
-            const { userId, username, avatar, avatarType, bio, accountType } = payload;
-            const user = DB.users.find(u => u.id === userId);
-            if (!user) return { success: false, error: 'Usuário não encontrado' };
-            if (username) user.username = username;
-            if (avatar) user.avatar = avatar;
-            if (avatarType) user.avatarType = avatarType;
-            if (bio !== undefined) user.bio = bio.substring(0, 200);
-            if (accountType) user.accountType = accountType;
-            saveDatabase();
-            return { success: true, user: { ...user, password: undefined } };
-        },
-        
-        getUserProfile: () => {
-            const { userId, requesterId } = payload;
-            const user = DB.users.find(u => u.id === userId);
-            if (!user) return { success: false, error: 'Usuário não encontrado' };
-            
-            const isOwner = requesterId === userId;
-            const isFollowing = user.followers && user.followers.includes(requesterId);
-            const isPrivate = user.accountType === 'private';
-            
-            let posts = [];
-            if (isOwner) {
-                posts = DB.posts.filter(p => p.userId === userId && !p.archived);
-            } else if (!isPrivate || isFollowing) {
-                posts = DB.posts.filter(p => p.userId === userId && !p.archived);
-            }
-            
-            return {
-                success: true,
-                profile: { ...user, password: undefined },
-                posts: posts.slice(0, 50),
-                isPrivate: isPrivate && !isOwner && !isFollowing
-            };
-        },
-        
-        // ========== SOCIAL ==========
-        followUser: () => {
-            const { userId, targetUserId } = payload;
-            const user = DB.users.find(u => u.id === userId);
-            const target = DB.users.find(u => u.id === targetUserId);
-            if (!user || !target) return { success: false };
-            
-            if (target.accountType === 'private') {
-                if (!target.followRequests) target.followRequests = [];
-                if (!target.followRequests.includes(userId)) {
-                    target.followRequests.push(userId);
-                }
+            if (!user) {
                 saveDatabase();
-                return { success: true, status: 'requested' };
-            } else {
-                if (!user.following) user.following = [];
-                if (!target.followers) target.followers = [];
-                if (!user.following.includes(targetUserId)) {
-                    user.following.push(targetUserId);
-                    target.followers.push(userId);
-                }
-                saveDatabase();
-                const isMutual = target.following && target.following.includes(userId);
-                return { success: true, status: isMutual ? 'mutual' : 'following' };
+                return { success: false, error: 'Invalid credentials' };
             }
-        },
-        
-        unfollowUser: () => {
-            const { userId, targetUserId } = payload;
-            const user = DB.users.find(u => u.id === userId);
-            const target = DB.users.find(u => u.id === targetUserId);
-            if (user && user.following) {
-                user.following = user.following.filter(id => id !== targetUserId);
-            }
-            if (target && target.followers) {
-                target.followers = target.followers.filter(id => id !== userId);
-            }
+            
+            // Resetar tentativas
+            loginAttempts.count = 0;
+            
+            // Gerar token
+            const token = generateSessionToken(user.id, reqIP);
+            
             saveDatabase();
-            return { success: true };
+            return { success: true, user: { ...user, password: undefined }, token };
         },
         
-        // ========== POSTS ==========
         createPost: () => {
             const post = {
-                id: 'p_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-                userId: payload.userId,
-                username: payload.username,
-                avatar: payload.avatar,
-                avatarType: payload.avatarType,
-                content: payload.content || '',
-                mediaBase64: payload.mediaBase64 || null,
-                mediaType: payload.mediaType || null,
-                hashtags: payload.hashtags || [],
-                likes: [],
-                comments: [],
-                reposts: [],
-                saves: [],
-                archived: false,
-                timestamp: Date.now(),
-                originalPostId: null,
-                originalUsername: null,
-                originalAvatar: null
+                id: 'p_' + now + '_' + crypto.randomBytes(3).toString('hex'),
+                ...payload,
+                likes: [], comments: [], reposts: [], saves: [],
+                timestamp: now, originalPostId: null
             };
             DB.posts.unshift(post);
             if (DB.posts.length > 2000) DB.posts = DB.posts.slice(0, 2000);
@@ -305,508 +642,153 @@ function processRequest(action, payload) {
         },
         
         getPosts: () => {
-            let posts = [...DB.posts].sort((a, b) => b.timestamp - a.timestamp);
-            return { success: true, posts: posts.slice(0, 100) };
+            return { success: true, posts: DB.posts.sort((a,b) => b.timestamp - a.timestamp).slice(0, 100) };
         },
         
-        likePost: () => {
-            const post = DB.posts.find(p => p.id === payload.postId);
-            if (post) {
-                if (!post.likes) post.likes = [];
-                const idx = post.likes.indexOf(payload.userId);
-                if (idx === -1) {
-                    post.likes.push(payload.userId);
-                } else {
-                    post.likes.splice(idx, 1);
-                }
-                saveDatabase();
-                return { success: true, likes: post.likes.length, liked: idx === -1 };
-            }
-            return { success: false, error: 'Post não encontrado' };
-        },
-        
-        commentPost: () => {
-            const post = DB.posts.find(p => p.id === payload.postId);
-            if (post) {
-                if (!post.comments) post.comments = [];
-                post.comments.push({
-                    id: 'c_' + Date.now(),
-                    userId: payload.userId,
-                    username: payload.username,
-                    avatar: payload.avatar,
-                    avatarType: payload.avatarType,
-                    content: payload.content,
-                    timestamp: Date.now(),
-                    replies: [],
-                    likes: []
-                });
-                saveDatabase();
-                return { success: true };
-            }
-            return { success: false, error: 'Post não encontrado' };
-        },
-        
-        replyComment: () => {
-            const post = DB.posts.find(p => p.id === payload.postId);
-            if (post) {
-                const comment = post.comments.find(c => c.id === payload.commentId);
-                if (comment) {
-                    if (!comment.replies) comment.replies = [];
-                    comment.replies.push({
-                        id: 'cr_' + Date.now(),
-                        userId: payload.userId,
-                        username: payload.username,
-                        avatar: payload.avatar,
-                        avatarType: payload.avatarType,
-                        content: payload.content,
-                        timestamp: Date.now()
-                    });
-                    saveDatabase();
-                }
-            }
-            return { success: true };
-        },
-        
-        repost: () => {
-            const original = DB.posts.find(p => p.id === payload.originalPostId);
-            if (original) {
-                const repost = {
-                    ...original,
-                    id: 'p_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-                    userId: payload.userId,
-                    username: payload.username,
-                    avatar: payload.avatar,
-                    avatarType: payload.avatarType,
-                    originalPostId: payload.originalPostId,
-                    originalUsername: original.username,
-                    originalAvatar: original.avatar,
-                    likes: [],
-                    comments: [],
-                    reposts: [],
-                    saves: [],
-                    timestamp: Date.now()
-                };
-                if (!original.reposts) original.reposts = [];
-                original.reposts.push(payload.userId);
-                DB.posts.unshift(repost);
-                saveDatabase();
-                return { success: true };
-            }
-            return { success: false, error: 'Post original não encontrado' };
-        },
-        
-        deletePost: () => {
-            const idx = DB.posts.findIndex(p => p.id === payload.postId && p.userId === payload.userId);
-            if (idx !== -1) {
-                DB.posts.splice(idx, 1);
-                saveDatabase();
-                return { success: true };
-            }
-            return { success: false, error: 'Post não encontrado ou sem permissão' };
-        },
-        
-        reportPost: () => {
-            const report = {
-                id: 'r_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-                postId: payload.postId,
-                reportedBy: payload.reportedBy,
-                reason: payload.reason,
-                timestamp: Date.now(),
-                resolved: false,
-                resolution: null,
-                resolvedAt: null
-            };
-            DB.reports.unshift(report);
-            saveDatabase();
-            return { success: true, message: 'Denúncia registrada' };
-        },
-        
-        savePost: () => {
-            const user = DB.users.find(u => u.id === payload.userId);
-            if (user) {
-                if (!user.savedPosts) user.savedPosts = [];
-                if (user.savedPosts.includes(payload.postId)) {
-                    user.savedPosts = user.savedPosts.filter(id => id !== payload.postId);
-                    saveDatabase();
-                    return { success: true, saved: false, message: 'Removido dos salvos' };
-                } else {
-                    user.savedPosts.push(payload.postId);
-                    saveDatabase();
-                    return { success: true, saved: true, message: 'Salvo!' };
-                }
-            }
-            return { success: false };
-        },
-        
-        getSavedPosts: () => {
-            const user = DB.users.find(u => u.id === payload.userId);
-            const saved = user && user.savedPosts ? DB.posts.filter(p => user.savedPosts.includes(p.id)) : [];
-            return { success: true, posts: saved };
-        },
-        
-        saveDraft: () => {
-            const user = DB.users.find(u => u.id === payload.userId);
-            if (user) {
-                if (!user.drafts) user.drafts = [];
-                user.drafts.unshift({
-                    id: 'd_' + Date.now(),
-                    content: payload.content,
-                    mediaBase64: payload.mediaBase64,
-                    mediaType: payload.mediaType,
-                    hashtags: payload.hashtags,
-                    timestamp: Date.now()
-                });
-                if (user.drafts.length > 20) user.drafts = user.drafts.slice(0, 20);
-                saveDatabase();
-            }
-            return { success: true };
-        },
-        
-        getDrafts: () => {
-            const user = DB.users.find(u => u.id === payload.userId);
-            return { success: true, drafts: user?.drafts || [] };
-        },
-        
-        archivePost: () => {
-            const post = DB.posts.find(p => p.id === payload.postId && p.userId === payload.userId);
-            if (post) {
-                post.archived = true;
-                saveDatabase();
-                return { success: true };
-            }
-            return { success: false };
-        },
-        
-        getArchivedPosts: () => {
-            const user = DB.users.find(u => u.id === payload.userId);
-            const posts = user ? DB.posts.filter(p => p.userId === payload.userId && p.archived) : [];
-            return { success: true, posts };
-        },
-        
-        // ========== STORIES ==========
-        createStory: () => {
-            const story = {
-                id: 's_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-                userId: payload.userId,
-                username: payload.username,
-                avatar: payload.avatar,
-                avatarType: payload.avatarType,
-                mediaBase64: payload.mediaBase64,
-                mediaType: payload.mediaType,
-                views: [],
-                timestamp: Date.now(),
-                expiresAt: Date.now() + 86400000 // 24 horas
-            };
-            DB.stories.unshift(story);
-            DB.stories = DB.stories.filter(s => s.expiresAt > Date.now());
-            saveDatabase();
-            return { success: true, story };
-        },
-        
-        getStories: () => {
-            DB.stories = DB.stories.filter(s => s.expiresAt > Date.now());
-            saveDatabase();
-            return { success: true, stories: DB.stories.slice(0, 100) };
-        },
-        
-        // ========== MENSAGENS ==========
-        sendMessage: () => {
-            const msg = {
-                id: 'm_' + Date.now(),
-                fromUserId: payload.fromUserId,
-                fromUsername: payload.fromUsername,
-                toUserId: payload.toUserId,
-                content: payload.content || '',
-                mediaBase64: payload.mediaBase64 || null,
-                mediaType: payload.mediaType || null,
-                replyTo: payload.replyTo || null,
-                read: false,
-                timestamp: Date.now()
-            };
-            DB.messages.push(msg);
-            if (DB.messages.length > 5000) DB.messages = DB.messages.slice(-5000);
-            saveDatabase();
-            return { success: true, message: msg };
-        },
-        
-        getMessages: () => {
-            const messages = DB.messages
-                .filter(m =>
-                    (m.fromUserId === payload.userId && m.toUserId === payload.otherUserId) ||
-                    (m.fromUserId === payload.otherUserId && m.toUserId === payload.userId)
-                )
-                .sort((a, b) => a.timestamp - b.timestamp)
-                .slice(-200);
-            
-            // Marcar como lidas
-            DB.messages.forEach(m => {
-                if (m.toUserId === payload.userId && m.fromUserId === payload.otherUserId) {
-                    m.read = true;
-                }
-            });
-            saveDatabase();
-            return { success: true, messages };
-        },
-        
-        getConversations: () => {
-            const userMsgs = DB.messages.filter(m =>
-                m.fromUserId === payload.userId || m.toUserId === payload.userId
-            );
-            const conversations = {};
-            userMsgs.forEach(m => {
-                const otherId = m.fromUserId === payload.userId ? m.toUserId : m.fromUserId;
-                if (!conversations[otherId] || conversations[otherId].timestamp < m.timestamp) {
-                    const otherUser = DB.users.find(u => u.id === otherId);
-                    conversations[otherId] = {
-                        userId: otherId,
-                        username: otherUser?.username || 'Desconhecido',
-                        avatar: otherUser?.avatar || 'default',
-                        avatarType: otherUser?.avatarType || 'emoji',
-                        lastMessage: (m.content || '[Mídia]').substring(0, 30),
-                        unread: m.toUserId === payload.userId && !m.read,
-                        timestamp: m.timestamp
-                    };
-                }
-            });
-            return {
-                success: true,
-                conversations: Object.values(conversations).sort((a, b) => b.timestamp - a.timestamp)
-            };
-        },
-        
-        // ========== NOTES ==========
-        createNote: () => {
-            if (DB.notes.find(n => n.userId === payload.userId && n.expiresAt > Date.now())) {
-                return { success: false, error: 'Já tem uma nota ativa' };
-            }
-            const note = {
-                id: 'n_' + Date.now(),
-                userId: payload.userId,
-                username: payload.username,
-                avatar: payload.avatar,
-                avatarType: payload.avatarType,
-                content: payload.content || '',
-                timestamp: Date.now(),
-                expiresAt: Date.now() + 72000000 // 20 horas
-            };
-            DB.notes.unshift(note);
-            saveDatabase();
-            return { success: true };
-        },
-        
-        getNotes: () => {
-            DB.notes = DB.notes.filter(n => n.expiresAt > Date.now());
-            saveDatabase();
-            return { success: true, notes: DB.notes };
-        },
-        
-        deleteNote: () => {
-            DB.notes = DB.notes.filter(n => !(n.id === payload.noteId && n.userId === payload.userId));
-            saveDatabase();
-            return { success: true };
-        },
-        
-        // ========== REELS ==========
-        createReel: () => {
-            const reel = {
-                id: 'rl_' + Date.now(),
-                userId: payload.userId,
-                username: payload.username,
-                avatar: payload.avatar,
-                avatarType: payload.avatarType,
-                content: payload.content || '',
-                videoBase64: payload.videoBase64,
-                hashtags: payload.hashtags || [],
-                likes: [],
-                comments: [],
-                shares: [],
-                views: [],
-                timestamp: Date.now()
-            };
-            DB.reels.unshift(reel);
-            if (DB.reels.length > 500) DB.reels = DB.reels.slice(0, 500);
-            saveDatabase();
-            return { success: true };
-        },
-        
-        getReels: () => {
-            return { success: true, reels: DB.reels.slice(0, 50) };
-        },
-        
-        // ========== SEARCH ==========
-        search: () => {
-            const query = (payload.query || '').toLowerCase();
-            const results = {
-                users: DB.users
-                    .filter(u => u.username.toLowerCase().includes(query))
-                    .slice(0, 20)
-                    .map(u => ({
-                        id: u.id,
-                        username: u.username,
-                        avatar: u.avatar,
-                        avatarType: u.avatarType,
-                        bio: u.bio
-                    })),
-                posts: DB.posts
-                    .filter(p =>
-                        p.content && p.content.toLowerCase().includes(query) ||
-                        p.hashtags && p.hashtags.some(h => h.toLowerCase().includes(query))
-                    )
-                    .slice(0, 20)
-            };
-            return { success: true, results };
-        },
-        
-        // ========== ADMIN ==========
         adminPing: () => {
             DB.adminConnected = true;
-            DB.lastAdminPing = Date.now();
-            
-            // Retornar log offline acumulado
+            DB.lastAdminPing = now;
             const pendingLog = [...offlineLog];
             offlineLog = [];
-            saveOfflineLog();
             saveDatabase();
-            
             return {
-                success: true,
-                pendingLog,
+                success: true, pendingLog,
                 stats: {
-                    users: DB.users.length,
-                    posts: DB.posts.length,
-                    reports: DB.reports.filter(r => !r.resolved).length,
+                    users: DB.users.length, posts: DB.posts.length,
+                    reports: (DB.reports||[]).filter(r=>!r.resolved).length,
                     suspended: Object.keys(DB.suspendedUsers).length,
-                    stories: DB.stories.filter(s => s.expiresAt > Date.now()).length,
-                    messages: DB.messages.length
+                    bannedIPs: Object.keys(DB.ipBlacklist).length,
+                    ddosBlocks: Object.values(DB.ddosProtection).filter(d=>d.blocked).length,
+                    auditEntries: auditLog.length
                 }
             };
         },
         
-        adminGetAllReports: () => {
-            return { success: true, reports: DB.reports.sort((a, b) => b.timestamp - a.timestamp) };
+        adminGetAuditLog: () => {
+            return { success: true, auditLog: auditLog.slice(-100) };
         },
         
-        adminGetAllUsers: () => {
-            const users = DB.users.map(u => ({
-                id: u.id,
-                username: u.username,
-                avatar: u.avatar,
-                avatarType: u.avatarType,
-                bio: u.bio,
-                accountType: u.accountType,
-                followersCount: u.followers ? u.followers.length : 0,
-                postsCount: DB.posts.filter(p => p.userId === u.id).length,
-                createdAt: u.createdAt,
-                isSuspended: !!DB.suspendedUsers[u.id],
-                suspensionInfo: DB.suspendedUsers[u.id] || null
-            }));
-            return { success: true, users };
-        },
-        
-        ping: () => {
+        adminGetSecurityStats: () => {
             return {
                 success: true,
-                timestamp: Date.now(),
-                uptime: Math.floor((Date.now() - DB.startTime) / 1000),
-                requestCount: DB.requestCount,
-                adminConnected: DB.adminConnected
+                stats: {
+                    totalBans: DB.banHistory.length,
+                    activeBlocks: Object.keys(DB.ipBlacklist).length,
+                    ddosAttacks: Object.values(DB.ddosProtection).filter(d=>d.blocked).length,
+                    injectionAttempts: auditLog.filter(a=>a.type==='SQL_INJECTION').length,
+                    maliciousContent: auditLog.filter(a=>a.type==='MALICIOUS_CONTENT').length,
+                    honeypotTriggers: Object.values(DB.honeypotTriggers).reduce((a,b)=>a+b,0),
+                    sessionHijackAttempts: auditLog.filter(a=>a.type==='SESSION_HIJACK_ATTEMPT').length,
+                    rateLimitViolations: Object.keys(DB.rateLimitViolations).length
+                }
             };
-        }
+        },
+        
+        ping: () => ({
+            success: true, timestamp: now,
+            securityLevel: 'DEUS_SUPREMO',
+            activeProtections: 10
+        })
     };
     
-    // Executar handler correspondente
-    if (handlers[action]) {
-        return handlers[action]();
-    }
-    
-    // Handlers simples (ações admin)
-    if (action === 'adminDeletePost' || action === 'adminDeleteUser' ||
-        action === 'adminSuspendUser' || action === 'adminUnsuspendUser' ||
-        action === 'adminResolveReport') {
-        // Apenas registrar e retornar sucesso
-        // O processamento real é feito no app admin
-        console.log(`📋 Ação admin registrada: ${action}`);
-        return { success: true, message: 'Ação registrada' };
-    }
-    
-    return { success: false, error: 'Ação não encontrada: ' + action };
+    if (handlers[action]) return handlers[action]();
+    return { success: false, error: 'Unknown action' };
 }
 
-// ==================== SERVIDOR HTTP ====================
+// ==================== RATE LIMITING ====================
+function checkRateLimit(ip) {
+    const now = Date.now();
+    if (!DB.ipRequests[ip]) DB.ipRequests[ip] = { requests: [], count: 0 };
+    DB.ipRequests[ip].requests = DB.ipRequests[ip].requests.filter(t => now - t < 60000);
+    DB.ipRequests[ip].requests.push(now);
+    DB.ipRequests[ip].count++;
+    return DB.ipRequests[ip].requests.length <= GOD_MODE_SUPREME.maxRequestsPerMinute;
+}
+
+// ==================== SERVER ====================
 const server = http.createServer((req, res) => {
-    // CORS headers
+    // Security headers
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.setHeader('Content-Type', 'application/json');
     
-    // Preflight
-    if (req.method === 'OPTIONS') {
-        res.writeHead(200);
-        res.end();
-        return;
-    }
+    if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
     
-    // Rota da API
+    const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
+    const reqHeaders = {
+        'user-agent': req.headers['user-agent'] || '',
+        'accept-language': req.headers['accept-language'] || '',
+        'origin': req.headers['origin'] || '',
+        'content-type': req.headers['content-type'] || ''
+    };
+    
     if (req.url === '/api' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', () => {
             try {
                 const { action, payload } = JSON.parse(body);
-                const result = processRequest(action, payload || {});
+                const result = processRequest(action, payload || {}, clientIP, reqHeaders);
                 res.writeHead(200);
                 res.end(JSON.stringify(result));
             } catch (error) {
                 res.writeHead(400);
-                res.end(JSON.stringify({ success: false, error: 'JSON inválido' }));
+                res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
             }
         });
         return;
     }
     
-    // Rota de health check
     if (req.url === '/ping' || req.url === '/') {
         res.writeHead(200);
         res.end(JSON.stringify({
-            success: true,
-            status: 'online',
-            timestamp: Date.now(),
-            uptime: Math.floor((Date.now() - DB.startTime) / 1000),
-            users: DB.users.length,
-            posts: DB.posts.length,
-            adminConnected: DB.adminConnected
+            success: true, status: 'online',
+            securityLevel: 'DEUS_SUPREMO',
+            timestamp: Date.now()
         }));
         return;
     }
     
-    // 404
     res.writeHead(404);
-    res.end(JSON.stringify({ success: false, error: 'Rota não encontrada' }));
+    res.end(JSON.stringify({ success: false, error: 'Not found' }));
 });
 
-// ==================== VERIFICAÇÕES PERIÓDICAS ====================
-// Verificar se admin está conectado
-setInterval(() => {
-    if (DB.lastAdminPing && Date.now() - DB.lastAdminPing > 30000) {
-        DB.adminConnected = false;
-    }
-    cleanExpiredData();
-}, 15000);
-
-// ==================== INICIAR ====================
+// ==================== INIT ====================
 loadDatabase();
-cleanExpiredData();
+
+setInterval(() => {
+    const now = Date.now();
+    // Limpar tokens expirados
+    Object.keys(DB.sessionTokens).forEach(t => {
+        if (DB.sessionTokens[t].expiresAt < now) delete DB.sessionTokens[t];
+    });
+    // Limpar rate limits antigos
+    Object.keys(DB.ipRequests).forEach(ip => {
+        DB.ipRequests[ip].requests = DB.ipRequests[ip].requests.filter(t => now - t < 60000);
+    });
+    saveDatabase();
+}, 300000);
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log('═══════════════════════════════════');
-    console.log('🔥 FLUXO SERVER PONTE ONLINE!');
+    console.log('═══════════════════════════════════════');
+    console.log('🛡️ FLUXO - SEGURANÇA NÍVEL DEUS SUPREMO');
     console.log('📡 Porta:', PORT);
-    console.log('🌐 API:', `http://0.0.0.0:${PORT}/api`);
-    console.log('👥 Usuários:', DB.users.length);
-    console.log('📝 Posts:', DB.posts.length);
-    console.log('📋 Log offline:', offlineLog.length, 'ações');
-    console.log('═══════════════════════════════════');
+    console.log('🔒 10 CAMADAS DE PROTEÇÃO ATIVAS');
+    console.log('  1. Blacklist Global');
+    console.log('  2. IP Ban');
+    console.log('  3. DDoS Protection');
+    console.log('  4. Rate Limiting');
+    console.log('  5. Header Validation');
+    console.log('  6. Suspension Check');
+    console.log('  7. Honeypot (Anti-Bot)');
+    console.log('  8. SQL Injection Detection');
+    console.log('  9. Content Sanitization (Anti-XSS)');
+    console.log(' 10. Race Condition Detection');
+    console.log('═══════════════════════════════════════');
 });
-
-module.exports = server;
